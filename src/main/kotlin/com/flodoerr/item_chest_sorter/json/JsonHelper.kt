@@ -2,6 +2,8 @@ package com.flodoerr.item_chest_sorter.json
 
 import com.beust.klaxon.Klaxon
 import org.bukkit.command.ConsoleCommandSender
+import org.bukkit.Bukkit
+import java.util.UUID
 import java.io.File
 import java.nio.file.Paths
 import kotlin.collections.ArrayList
@@ -25,108 +27,76 @@ class JsonHelper(dataFolder: File, commandSender: ConsoleCommandSender? = null, 
     }
 
     /**
-     * adds a sender to the json file
-     * @param sender sender to be added
-     * @return true if added successfully
-     *
-     * @author Flo Dörr
-     */
-    fun addSender(sender: Sender): Boolean {
-        val json = getJSON()
-        for (jsonSender in json.sender) {
-            if(jsonSender.sid == sender.sid){
-                return false
-            }
-        }
-        json.sender.add(sender)
-        saveJSONIfNecessary(json)
-        return true
-    }
-
-    /**
-     * removes a sender by a sender object
-     * @param sender sender to be removed
-     * @return true if removed successfully
-     *
-     * @author Flo Dörr
-     */
-    fun removeSender(sender: Sender): Boolean {
-        return removeSender(sender.sid)
-    }
-
-    /**
-     * removes a sender by a sender id
-     * @param sid id of sender to be removed
-     * @return true if removed successfully
-     *
-     * @author Flo Dörr
-     */
-    fun removeSender(sid: String): Boolean {
-        val json = getJSON()
-        for (sender in json.sender){
-            if(sid == sender.sid) {
-                json.sender.remove(sender)
-                saveJSONIfNecessary(json)
-                return true
-            }
-        }
-        return false
-    }
-
-    /**
-     * return a sender object by a sender's id
-     * @param sid id of the sender to find
-     * @return Sender object if found, else null
-     *
-     * @author Flo Dörr
-     */
-    fun getSenderById(sid: String): Sender? {
-        val json = getJSON()
-        for (sender in json.sender) {
-            if(sender.sid == sid) {
-                return sender
-            }
-        }
-        return null
-    }
-
-    /**
-     * return a sender object by a sender's cords
-     * @param cords coordinates of the sender chest
-     * @return Sender object if found, else null
-     *
-     * @author Flo Dörr
-     */
-    fun getSenderByCords(cords: Cords): Sender? {
-        val json = getJSON()
-        for (sender in json.sender) {
-            if(sender.cords.left == cords || sender.cords.right == cords) {
-                return sender
-            }
-        }
-        return null
-    }
-
-    /**
-     * checks if a chest was saved by given coordinates
+     * generates a unique id for a chest based on
+     * its coordinates and world location.
      * @param cords coordinates of a potential chest
-     * @return true if found, false if not
      *
-     * @author Flo Dörr
+     * @author elnewfie
      */
-    fun chestExists(cords: Cords): Boolean {
+
+    fun generateId(cords: ChestLocation): String {
+        return "${cords.left.x}~${cords.left.y}~${cords.left.z}~${Bukkit.getServer().getWorld(UUID.fromString(cords.left.world))!!.name}"
+    }
+
+    /**
+     * adds the specified chest to the list of tracked chests
+     * @param chest the chest to track
+     * @return true if added, false if chest is already tracked
+     *
+     * @author elnewfie
+     */
+    fun addChest(chest: ItemChest): Boolean {
         val json = getJSON()
-        for (sender in json.sender) {
-            for (receiver in sender.receiver) {
-                if(receiver.cords.left == cords || receiver.cords.right == cords) {
-                    return true
-                }
-            }
-            if(sender.cords.left == cords || sender.cords.right == cords) {
-                return true
-            }
+
+        if(json.chests.firstOrNull{ it.id == chest.id} == null)  {
+            json.chests.add(chest)
+            return true
         }
+
         return false
+    }
+
+    /**
+     * returns the chest matching the specified id
+     * @param id unique id of the chest
+     * @return instance of ItemChest if found, otherwise null
+     *
+     * @author elnewfie
+     */
+    fun getChestById(id: String): ItemChest? {
+        return getJSON().chests.firstOrNull{ it.id == id}
+    }
+
+    /**
+     * returns the ItemChest instance at the specified coordinates
+     * @param cords coordinates of chest
+     * @return ItemChest instance if found, otherwise null
+     *
+     * @author elnewfie
+     */
+    fun getChestByCords(cords: Cords): ItemChest? {
+        return getJSON().chests.firstOrNull{
+            it.cords.left == cords ||
+            it.cords.right == cords
+        }
+    }
+
+    /**
+     * indicates if the specified chest is a sender
+     * (has receiver chests linked to it)
+     * @param id id of chest to check
+     * @return true if chest exists and has receivers, false if not
+     *
+     * @author elnewfie
+     */
+    fun isSender(id: String): Boolean {
+        val chest = getChestById(id)
+
+        return chest != null && chest.receivers.isNotEmpty()
+    }
+
+    fun isReceiver(chest: ItemChest?): Boolean {
+        return chest != null && chest.senders.isNotEmpty()
     }
 
     /**
@@ -135,126 +105,47 @@ class JsonHelper(dataFolder: File, commandSender: ConsoleCommandSender? = null, 
      *
      * @author Flo Dörr
      */
-    fun getSender(): ArrayList<Sender> {
-        return getJSON().sender
+    fun getSender(): List<ItemChest> {
+        return getJSON().chests.filter{ it.receivers.isNotEmpty() }
     }
 
-    /**
-     * adds a receiver to a sender
-     * @param receiver to be added
-     * @param sender to which the receiver should be added to
-     * @return true if added successfully
-     *
-     * @author Flo Dörr
-     */
-    fun addReceiverToSender(receiver: Receiver, sender: Sender): Boolean {
-        return addReceiverToSender(receiver, sender.sid)
-    }
+    fun addReceiverToSender(receiverId: String, senderId: String): Boolean {
+        val sender = getChestById(senderId)
+        val receiver = getChestById(receiverId)
 
-    /**
-     * adds a receiver to a sender by the sender's id
-     * @param receiver to be added
-     * @param sid sender id to which the receiver should be added to
-     * @return true if added successfully
-     *
-     * @author Flo Dörr
-     */
-    fun addReceiverToSender(receiver: Receiver, sid: String): Boolean {
-        val json = getJSON()
-        for (jsonSender in json.sender) {
-            if(jsonSender.sid == sid) {
-                for (jsonReceiver in jsonSender.receiver) {
-                    if(jsonReceiver.rid == receiver.rid) {
-                        return false
-                    }
-                }
-                jsonSender.receiver.add(receiver)
-                saveJSONIfNecessary(json)
-                return true
+        if(sender != null && receiver != null) {
+            if(sender.receivers.firstOrNull{ it == receiverId } == null) {
+                sender.receivers.add(receiverId)
             }
+
+            if(receiver.senders.firstOrNull{ it == senderId}  == null) {
+                receiver.senders.add(senderId)
+            }
+
+            return true
         }
+
         return false
     }
 
-    /**
-     * removes a receiver by a receiver object
-     * @param receiver receiver to be removed
-     * @return true if removed successfully
-     *
-     * @author Flo Dörr
-     */
-    fun removeReceiver(receiver: Receiver): Boolean {
-        return removeReceiver(receiver.rid)
-    }
-
-    /**
-     * removes a receiver by a receiver id
-     * @param rid id of receiver to be removed
-     * @return true if removed successfully
-     *
-     * @author Flo Dörr
-     */
-    fun removeReceiver(rid: String): Boolean {
+    fun removeChest(chestId: String): Boolean {
         val json = getJSON()
-        for (sender in json.sender) {
-            for (receiver in sender.receiver) {
-                if(receiver.rid == rid) {
-                    sender.receiver.remove(receiver)
-                    saveJSONIfNecessary(json)
-                    return true
-                }
+
+        val chest = json.chests.firstOrNull{ it.id == chestId }
+        if(chest != null) {
+            // Remove any existing linkages
+            for(testChest in json.chests) {
+                testChest.senders.remove(chestId)
+                testChest.receivers.remove(chestId)
             }
+
+            //Remove the chest
+            json.chests.remove(chest)
+            saveJSONIfNecessary(json)
+            return true
         }
+
         return false
-    }
-
-    /**
-     * return all receiver of a sender object
-     * @param sender sender whose receiver should be returned
-     * @return List of receiver
-     *
-     * @author Flo Dörr
-     */
-    fun getReceiverFromSender(sender: Sender): ArrayList<Receiver>? {
-        return getReceiverFromSender(sender.sid)
-    }
-
-    /**
-     * return all receiver of a sender by its id
-     * @param sid sender's id whose receiver should be returned
-     * @return List of receiver
-     *
-     * @author Flo Dörr
-     */
-    fun getReceiverFromSender(sid: String): ArrayList<Receiver>? {
-        val sender = getSenderById(sid) ?: return null
-        return sender.receiver
-    }
-
-    /**
-     * searches through all chest (senders and receivers) and returns either a Sender or a Receiver
-     * @param cords cords of the object to find
-     * @return if no chest is found null
-     *
-     * @author Flo Dörr
-     */
-    fun getSavedChestFromCords(cords: Cords): Pair<Sender?, Receiver?>? {
-        val json = getJSON()
-        val receivers = ArrayList<Receiver>()
-        // first go through sender because it could be potentially faster
-        for (sender in json.sender) {
-            if (sender.cords.left == cords || sender.cords.right == cords) {
-                return Pair(sender, null)
-            }
-            receivers.addAll(sender.receiver)
-        }
-        // if not in sender go through receiver
-        for (receiver in receivers) {
-            if (receiver.cords.left == cords || receiver.cords.right == cords) {
-                return Pair(null, receiver)
-            }
-        }
-        return null
     }
 
     /**
@@ -320,25 +211,46 @@ class JsonHelper(dataFolder: File, commandSender: ConsoleCommandSender? = null, 
     }
 
     /**
-     * migrate json by setting the world param if this plugin was used before 1.6.0
-     * @param defaultWorld UUID of the default world
+     * reviews the saved JSON format and updates to the latest
+     * supported format used by the plugin.
      *
-     * @author Flo Dörr
+     * @author elnewfie
      */
-    fun migrateMissingWorldNamesJSON(defaultWorld: String) {
-        val json: JSON = getJSON()
-        for (sender in json.sender){
-            if(sender.cords.left.world == null){
-                sender.cords.left.world = defaultWorld
-                sender.cords.right?.world = defaultWorld
-            }
-            for(receiver in sender.receiver) {
-                if(receiver.cords.left.world == null){
-                    receiver.cords.left.world = defaultWorld
-                    receiver.cords.right?.world = defaultWorld
+    fun migrateJSON(defaultWorld: String) {
+        var json: JSON = getJSON()
+
+        if (json.version < 2 ) {
+            //Upgrade to new format
+            for(sender in json.sender!!) {
+                //Convert to ItemChest and generate new ID
+                val sChest = ItemChest(id=generateId(sender.cords), name=sender.name, cords=sender.cords, playerID=sender.playerID)
+
+                addChest(sChest)
+
+                for(receiver in sender.receiver) {
+                    val rChest = ItemChest(id=generateId(receiver.cords), cords=receiver.cords, playerID=receiver.playerID)
+
+                    addChest(rChest)
+
+                    if(!addReceiverToSender(rChest.id, sChest.id)) {
+                        println("unable to make sender/receiver relationship between chests " + sChest.id + " and " + rChest.id)
+                    }
                 }
             }
+
+            for(chest in json.chests) {
+                if(chest.cords.left.world == null) {
+                    chest.cords.left.world = defaultWorld
+                    chest.cords.right?.world = defaultWorld
+                }
+            }
+
+            json.sender = null
+            json.version = 2
         }
+
+        //As future changes are made to the JSON format, add them here and increase the version
+
         saveJSON(json)
     }
 
@@ -349,10 +261,6 @@ class JsonHelper(dataFolder: File, commandSender: ConsoleCommandSender? = null, 
      * @author Flo Dörr
      */
     fun getChestCountByPlayer(playerUUID: String): Int {
-        return getJSON().sender
-            .filter { sender -> sender.playerID == playerUUID }
-            .sumOf { sender -> 1 + sender.receiver
-                .count { receiver -> receiver.playerID == playerUUID }
-            }
+        return getJSON().chests.count{ it.playerID == playerUUID }
     }
 }

@@ -60,7 +60,7 @@ class Commands(private val db: JsonHelper, private val ics: ItemChestSorter): Co
                             val permission = "ics.remove.sender"
                             if (sender.hasPermission(permission)) {
                                 val target = URLDecoder.decode(args[2], "UTF-8")
-                                if (db.removeSender(target)) {
+                                if (db.removeChest(target)) {
                                     currentSender[(sender as Player).uniqueId.toString()] = null
                                     sender.sendMessage("${ChatColor.GREEN}Successfully deleted the sender chest.")
                                 } else {
@@ -76,7 +76,7 @@ class Commands(private val db: JsonHelper, private val ics: ItemChestSorter): Co
                             val permission = "ics.remove.receiver"
                             if (sender.hasPermission(permission)) {
                                 val target = URLDecoder.decode(args[2], "UTF-8")
-                                if (db.removeReceiver(target)) {
+                                if (db.removeChest(target)) {
                                     sender.sendMessage("${ChatColor.GREEN}Successfully deleted the receiver chest.")
                                 } else {
                                     sender.sendMessage("${ChatColor.RED}Error while deleting the receiver chest with id ${target}. This most likely means the id was not found.")

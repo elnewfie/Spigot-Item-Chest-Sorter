@@ -95,7 +95,7 @@ class Listener(private val db: JsonHelper, private val main: ItemChestSorter): L
 
     @EventHandler(priority = EventPriority.LOWEST)
     fun onBlockBreakEvent(e: BlockBreakEvent) {
-        if(db.chestExists(locationToCords(e.block.location))) {
+        if(db.getChestByCords(locationToCords(e.block.location)) != null) {
             e.isCancelled = true
 
             if(main.config.getBoolean("chatMessages.breakingChests", true)) {
@@ -139,9 +139,10 @@ class Listener(private val db: JsonHelper, private val main: ItemChestSorter): L
     private fun checkInventory(inventory: Inventory, player: HumanEntity? = null, itemStack: ItemStack? = null) {
         if(inventory.location != null) {
             // get the sender by the inventory location
-            val sender = db.getSenderByCords(locationToCords(inventory.location!!))
-            // if null chest is no sender chest
-            if(sender != null) {
+            val sender = db.getChestByCords(locationToCords(inventory.location!!))
+
+            // ensure is an actual sender
+            if(sender != null && db.isSender(sender.id)){
                 if(inventory.type !== InventoryType.SHULKER_BOX || inventory.type === InventoryType.SHULKER_BOX && main.config.getBoolean("allowShulkerBoxes", false)) {
                     moving = true
                     // get items in chest
@@ -153,7 +154,7 @@ class Listener(private val db: JsonHelper, private val main: ItemChestSorter): L
                             return
                         }
                         // loop through all chest slots
-                        val receivers = sender.receiver
+                        val receivers = sender.receivers
 
                         if(receivers.size > 0) {
                             val airReceiver = ArrayList<Pair<Container, List<ItemStack>?>>()
@@ -172,7 +173,10 @@ class Listener(private val db: JsonHelper, private val main: ItemChestSorter): L
                                 false
                             }
 
-                            for (receiver in receivers) {
+                            for (receiverId in receivers) {
+                                val receiver = db.getChestById(receiverId)
+                                if(receiver == null) continue
+                                
                                 val leftLocation = cordsToLocation(receiver.cords.left)
                                 val leftChest = leftLocation.world!!.getBlockAt(leftLocation).state as Container
                                 // get right chest if cords not null
@@ -547,22 +551,22 @@ class Listener(private val db: JsonHelper, private val main: ItemChestSorter): L
      * @author Flo Dörr
      */
     private fun handleSenderHoe(player: Player, block: Block) {
-        val existingSender = db.getSenderByCords(locationToCords(block.location))
-        if(existingSender != null) {
+        var existingSender = db.getChestByCords(locationToCords(block.location))
+        if(existingSender != null && db.isSender(existingSender.id)) {
             val permission = "ics.select.sender"
             if(!player.hasPermission(permission)){
                 showNoPermissionMessage(player, permission)
                 return
             }
-            currentSender[player.uniqueId.toString()] = existingSender.sid
-            player.sendMessage("${ChatColor.GREEN}Sender chest with id '${existingSender.sid}' is now selected")
+            currentSender[player.uniqueId.toString()] = existingSender.id
+            player.sendMessage("${ChatColor.GREEN}Sender chest with id '${existingSender.id}' is now selected")
             player.inventory.setItemInMainHand(null)
             player.sendMessage("${ChatColor.YELLOW}If you want to remove this chest instead, please click on the next message in the chat (!This also implies the deletion of the receiver chests!):")
 
             val message = TextComponent("delete")
             message.color = net.md_5.bungee.api.ChatColor.RED
             message.isUnderlined = true
-            val encodedSid = URLEncoder.encode(existingSender.sid, "UTF-8")
+            val encodedSid = URLEncoder.encode(existingSender.id, "UTF-8")
             message.clickEvent = ClickEvent(ClickEvent.Action.RUN_COMMAND, "/ics remove sender ${encodedSid}")
             player.spigot().sendMessage(message)
         }else{
@@ -576,19 +580,14 @@ class Listener(private val db: JsonHelper, private val main: ItemChestSorter): L
                 return
             }
             val chestLocation = getChestLocation((block.state as Container).inventory)
-            var sid = "${chestLocation.left.x}~${chestLocation.left.y}~${chestLocation.left.z}~${Bukkit.getServer().getWorld(UUID.fromString(chestLocation.left.world))!!.name}~sender"
-            sid += if(chestLocation.right != null) {
-                "~double~chest"
-            }else{
-                "~chest"
-            }
-            val sender = Sender(sid, "Sender", chestLocation, ArrayList(), player.uniqueId.toString())
-            currentSender[player.uniqueId.toString()] = sender.sid
-            db.addSender(sender)
+            val sender = ItemChest(db.generateId(chestLocation), "Sender", chestLocation, player.uniqueId.toString())
+
+            currentSender[player.uniqueId.toString()] = sender.id
+            db.addChest(sender)
 
             player.inventory.setItemInMainHand(null)
 
-            player.sendMessage("${ChatColor.GREEN}Successfully saved this chest as sender chest. Because you used the hoe tool the id was auto generated ${ChatColor.GRAY}(${sid})${ChatColor.GREEN}. This chest was also selected as current sender")
+            player.sendMessage("${ChatColor.GREEN}Successfully saved this chest as sender chest. Because you used the hoe tool the id was auto generated ${ChatColor.GRAY}(${sender.id})${ChatColor.GREEN}. This chest was also selected as current sender")
         }
     }
 
@@ -602,11 +601,14 @@ class Listener(private val db: JsonHelper, private val main: ItemChestSorter): L
     private fun handleReceiverHoe(player: Player, block: Block) {
         if(currentSender[player.uniqueId.toString()] != null) {
             val chestLocation = getChestLocation((block.state as Container).inventory)
-            val existingChest = db.getSavedChestFromCords(chestLocation.left)
-            val sender = db.getSenderById(currentSender[player.uniqueId.toString()]!!)
-            val isSenderReceiverLoop = sender?.cords == existingChest?.first?.cords
-            if(existingChest == null || (main.config.getBoolean("sendFromHopperOrSender", false) &&
-                        existingChest.first != null && !isSenderReceiverLoop)) {
+            var existingChest = db.getChestByCords(chestLocation.left)
+            val sender = db.getChestById(currentSender[player.uniqueId.toString()]!!)
+            val isSenderReceiverLoop = sender?.cords == existingChest?.cords
+            if(existingChest == null || 
+                (main.config.getBoolean("sendFromHopperOrSender", false) 
+                    && db.isSender(existingChest.id)
+                    && !isSenderReceiverLoop)
+            ) {
                 val permission = "ics.create.receiver"
                 if(!player.hasPermission(permission)){
                     showNoPermissionMessage(player, permission)
@@ -621,14 +623,15 @@ class Listener(private val db: JsonHelper, private val main: ItemChestSorter): L
                     showNoPermissionMessage(player, permission2)
                     return
                 }
-                var rid = "${chestLocation.left.x}~${chestLocation.left.y}~${chestLocation.left.z}~${Bukkit.getServer().getWorld(UUID.fromString(chestLocation.left.world))!!.name}~receiver"
-                rid += if(chestLocation.right != null) {
-                    "~double~chest"
-                }else{
-                    "~chest"
+
+                //Create the new record only if doesn't already exist
+                if(existingChest == null) {
+                    existingChest = ItemChest(id=db.generateId(chestLocation), cords=chestLocation, playerID=player.uniqueId.toString())
+                    db.addChest(existingChest)
                 }
-                db.addReceiverToSender(Receiver(rid, chestLocation, player.uniqueId.toString()), currentSender[player.uniqueId.toString()]!!)
-                player.sendMessage("${ChatColor.GREEN}Successfully saved this chest as a receiver chest. Because you used the hoe tool the id was auto generated (${rid}).")
+
+                db.addReceiverToSender(existingChest.id, currentSender[player.uniqueId.toString()]!!)
+                player.sendMessage("${ChatColor.GREEN}Successfully saved this chest as a receiver chest. Because you used the hoe tool the id was auto generated (${existingChest.id}).")
             }else{
                 when {
                     isSenderReceiverLoop -> {
@@ -637,7 +640,7 @@ class Listener(private val db: JsonHelper, private val main: ItemChestSorter): L
                         m1.color = net.md_5.bungee.api.ChatColor.RED
                         player.spigot().sendMessage(m1)
                     }
-                    existingChest.first != null -> {
+                    db.isSender(existingChest.id) -> {
                         val permission = "ics.remove.sender"
                         if(!player.hasPermission(permission)){
                             showNoPermissionMessage(player, permission)
@@ -649,7 +652,7 @@ class Listener(private val db: JsonHelper, private val main: ItemChestSorter): L
                         val m2 = TextComponent("click here.")
                         m2.color = net.md_5.bungee.api.ChatColor.RED
                         m2.isUnderlined = true
-                        var encodedSid = URLEncoder.encode(existingChest.first!!.sid, "UTF-8")
+                        var encodedSid = URLEncoder.encode(existingChest.id, "UTF-8")
                         m2.clickEvent = ClickEvent(ClickEvent.Action.RUN_COMMAND, "/ics remove sender ${encodedSid}")
                         val m3 = TextComponent(" Warning! Deleting a sender chest will also delete all its receivers!")
                         m3.color = net.md_5.bungee.api.ChatColor.RED
@@ -657,7 +660,7 @@ class Listener(private val db: JsonHelper, private val main: ItemChestSorter): L
                         m1.addExtra(m3)
                         player.spigot().sendMessage(m1)
                     }
-                    else -> {
+                    db.isReceiver(existingChest) -> {
                         val permission = "ics.remove.receiver"
                         if(!player.hasPermission(permission)){
                             showNoPermissionMessage(player, permission)
@@ -669,7 +672,7 @@ class Listener(private val db: JsonHelper, private val main: ItemChestSorter): L
                         val m2 = TextComponent("click here.")
                         m2.color = net.md_5.bungee.api.ChatColor.RED
                         m2.isUnderlined = true
-                        var encodedRid = URLEncoder.encode(existingChest.second!!.rid, "UTF-8")
+                        var encodedRid = URLEncoder.encode(existingChest.id, "UTF-8")
                         m2.clickEvent = ClickEvent(ClickEvent.Action.RUN_COMMAND, "/ics remove receiver ${encodedRid}")
                         m1.addExtra(m2)
                         player.spigot().sendMessage(m1)
@@ -711,15 +714,15 @@ class Listener(private val db: JsonHelper, private val main: ItemChestSorter): L
             showNoPermissionMessage(player, permission)
             return
         }
-        val sender = currentSender[player.uniqueId.toString()]
-        if(sender != null) {
+        val senderId = currentSender[player.uniqueId.toString()]
+        if(senderId != null) {
             val world = player.world
-            val senderObj = db.getSenderById(sender)
+            val senderObj = db.getChestById(senderId)
             showParticle(getIndicationLocation(senderObj!!.cords, world), world)
-            val receivers = db.getReceiverFromSender(sender)
-            if(receivers != null) {
-                for (receiver in receivers) {
-                    showParticle(getIndicationLocation(receiver.cords, world), world)
+            for (receiver in senderObj.receivers) {
+                val chest = db.getChestById(receiver)
+                if(chest != null) {
+                    showParticle(getIndicationLocation(chest.cords, world), world)
                 }
             }
         }else{
@@ -778,7 +781,7 @@ class Listener(private val db: JsonHelper, private val main: ItemChestSorter): L
     private fun showNoSelectedSenderMessage(player: Player, callback: () -> Unit) {
         val sender = db.getSender()
         if(sender.size == 1) {
-            currentSender[player.uniqueId.toString()] = sender[0].sid
+            currentSender[player.uniqueId.toString()] = sender[0].id
             player.sendMessage("${ChatColor.YELLOW}No sender was selected. Since there is only one sender configured yet, this sender was selected automatically")
             callback()
         }else{
